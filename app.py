@@ -1,4 +1,5 @@
 from ui.agenda_ui import agenda_ui
+
 st.set_page_config(
     page_title="Consultorio",
     layout="wide",
