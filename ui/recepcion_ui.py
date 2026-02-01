@@ -1,4 +1,5 @@
 import streamlit as st
+
 from datetime import date
 from data.sheets_client import get_sheet
 from domain.finanzas import detectar_deuda
@@ -38,3 +39,15 @@ def recepcion_ui():
         if c3.button("💰 Cobrar", key=f"c{fila}"):
             ws.update_cell(fila, 6, "SI")
             st.success("Pago registrado")
+
+
+def recepcion_ui():
+    st.header("🛎️ Modo Recepción")
+
+    st.info("Vista simplificada para agenda y cobros rápidos")
+
+    st.write("👉 Acá luego veremos:")
+    st.write("- Agenda del día")
+    st.write("- Marcar asistencia")
+    st.write("- Cobros rápidos")
+
