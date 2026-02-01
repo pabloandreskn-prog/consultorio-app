@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from data.sheets_client import get_sheet
 from domain.pacientes import nuevo_paciente
+from ui.styles import aplicar_estilos_globales
+
 
 def pacientes_ui():
     st.header("👤 Pacientes")

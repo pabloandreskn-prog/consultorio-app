@@ -1,17 +1,44 @@
-from datetime import datetime
+import streamlit as st
+from datetime import date
+from data.sheets_client import get_sheet
+from domain.cierres import mes_esta_cerrado
 
-def hay_solapamiento(turnos_existentes, fecha, inicio_nuevo, fin_nuevo):
-    inicio_nuevo = datetime.strptime(inicio_nuevo, "%H:%M")
-    fin_nuevo = datetime.strptime(fin_nuevo, "%H:%M")
+def agenda_ui():
+    st.header("📅 Agenda")
 
-    for t in turnos_existentes:
-        if t["fecha"] != fecha:
-            continue
+    sheet = get_sheet("Consultorio")
+    ws_turnos = sheet.worksheet("turnos")
+    ws_cierres = sheet.worksheet("cierres")
 
-        inicio_existente = datetime.strptime(t["hora_inicio"], "%H:%M")
-        fin_existente = datetime.strptime(t["hora_fin"], "%H:%M")
+    turnos = ws_turnos.get_all_records()
+    cierres = ws_cierres.get_all_records()
 
-        if inicio_nuevo < fin_existente and fin_nuevo > inicio_existente:
-            return True
+    fecha = st.date_input("Fecha", value=date.today())
+    mes_actual = fecha.strftime("%Y-%m")
 
-    return False
+    if mes_esta_cerrado(cierres, mes_actual):
+        st.warning("🔒 Este mes está cerrado. La agenda es solo de lectura.")
+
+    turnos_dia = [
+        (i + 2, t) for i, t in enumerate(turnos)
+        if t["fecha"] == str(fecha)
+    ]
+
+    if not turnos_dia:
+        st.info("No hay turnos para esta fecha")
+        return
+
+    for fila, t in turnos_dia:
+        c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
+
+        c1.write(f"🕒 {t['hora']}")
+        c2.write(f"🧍 {t['paciente']}")
+
+        estado = "🟢 Pagado" if t["pagado"] == "SI" else "🔴 Pendiente"
+        c3.write(estado)
+
+        if not mes_esta_cerrado(cierres, mes_actual):
+            if c4.button("✔️ Asistió", key=f"a{fila}"):
+                ws_turnos.update_cell(fila, 5, "SI")
+                st.success("Asistencia registrada")
+
