@@ -1,6 +1,9 @@
+agenda figura asi y mi codigo es este_: 
+
 import streamlit as st
 from datetime import date
 from data.sheets_client import get_sheet
+from domain.finanzas import facturar_turno_individual
 from domain.cierres import mes_esta_cerrado
 
 def agenda_ui():
@@ -8,6 +11,9 @@ def agenda_ui():
 
     sheet = get_sheet("Consultorio")
     ws_turnos = sheet.worksheet("turnos")
+    ws_planes = sheet.worksheet("planes_pacientes")
+    planes = ws_planes.get_all_records()
+    df_planes = pd.DataFrame(planes)
     ws_cierres = sheet.worksheet("cierres")
 
     turnos = ws_turnos.get_all_records()

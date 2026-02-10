@@ -7,6 +7,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
+
+@st.cache_resource(show_spinner=False)
 def get_client():
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
@@ -14,6 +16,9 @@ def get_client():
     )
     return gspread.authorize(creds)
 
-def get_sheet(sheet_name):
+
+@st.cache_resource(show_spinner=False)
+def get_sheet(sheet_name: str):
     client = get_client()
     return client.open(sheet_name)
+

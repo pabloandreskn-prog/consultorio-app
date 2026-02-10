@@ -1,25 +1,30 @@
 import streamlit as st
 import pandas as pd
-import uuid
 from datetime import date
 
 from data.sheets_client import get_sheet
-from domain.finanzas import mes_cerrado
+from domain.cierres import mes_esta_cerrado
 from ui.styles import aplicar_estilos_globales
 
-def dashboard_ui():
-    aplicar_estilos_globales()
-    st.header("📊 Dashboard")
+# =========================
+# CARGA DE DATOS (SOLO DATOS, NO OBJETOS)
+# =========================
+@st.cache_data(ttl=300)
+def cargar_datos():
+    sheet = get_sheet("Consultorio")
 
+    pagos = sheet.worksheet("pagos").get_all_records()
+    cierres = sheet.worksheet("cierres").get_all_records()
+
+    return {
+        "pagos": pagos,
+        "cierres": cierres
+    }
 
 # =========================
 # HELPERS
 # =========================
 def es_pago_sospechoso(pagos, paciente, fecha, monto, metodo):
-    """
-    Devuelve True si existe un pago con:
-    mismo paciente + fecha + monto + método
-    """
     for p in pagos:
         if (
             p.get("paciente") == paciente
@@ -29,26 +34,36 @@ def es_pago_sospechoso(pagos, paciente, fecha, monto, metodo):
         ):
             return True
     return False
+def generar_id_numerico(pagos):
+    """
+    Devuelve el próximo ID numérico disponible.
+    Ignora IDs no numéricos (UUID viejos).
+    """
+    ids_numericos = []
 
+    for p in pagos:
+        try:
+            ids_numericos.append(int(p.get("id_pago")))
+        except (TypeError, ValueError):
+            continue
+
+    return max(ids_numericos, default=0) + 1
 
 # =========================
 # UI PAGOS
 # =========================
 def pagos_ui():
+    aplicar_estilos_globales()
     st.header("💰 Pagos")
 
-    sheet = get_sheet("Consultorio")
-    ws_pagos = sheet.worksheet("pagos")
-    ws_cierres = sheet.worksheet("cierres")
-
-    pagos = ws_pagos.get_all_records()
+    datos = cargar_datos()
+    pagos = datos["pagos"]
+    cierres = datos["cierres"]
 
     # =========================
     # SELECCIÓN DE MES
     # =========================
-    meses = sorted(
-        {p["mes"] for p in pagos if p.get("mes")}
-    )
+    meses = sorted({p["mes"] for p in pagos if p.get("mes")})
 
     mes_actual = date.today().strftime("%Y-%m")
     if mes_actual not in meses:
@@ -56,7 +71,7 @@ def pagos_ui():
 
     mes = st.selectbox("Mes", sorted(meses))
 
-    cerrado = mes_cerrado(ws_cierres, mes)
+    cerrado = mes_esta_cerrado(cierres, mes)
 
     if cerrado:
         st.warning(f"🔒 El mes {mes} está cerrado. No se pueden registrar pagos.")
@@ -83,12 +98,10 @@ def pagos_ui():
             fecha_str = fecha.strftime("%Y-%m-%d")
             mes_str = fecha.strftime("%Y-%m")
 
-            # ⚠️ Advertencia por posible duplicado
             if es_pago_sospechoso(pagos, paciente, fecha_str, monto, metodo):
                 st.warning(
                     "⚠️ Ya existe un pago con los mismos datos "
-                    "(paciente, fecha, monto y método). "
-                    "Si corresponde a otra sesión, podés continuar."
+                    "(paciente, fecha, monto y método)."
                 )
 
             nuevo_pago = [
@@ -101,7 +114,11 @@ def pagos_ui():
                 observacion
             ]
 
+            # 🔑 OBJETO FRESCO PARA ESCRIBIR
+            sheet = get_sheet("Consultorio")
+            ws_pagos = sheet.worksheet("pagos")
             ws_pagos.append_row(nuevo_pago)
+
             st.success("✅ Pago registrado correctamente")
             st.rerun()
 
@@ -111,13 +128,24 @@ def pagos_ui():
     st.divider()
     st.subheader("📋 Pagos registrados")
 
-    pagos_mes = [
-        p for p in pagos
-        if p.get("mes") == mes
-    ]
+    pagos_mes = [p for p in pagos if p.get("mes") == mes]
 
     if pagos_mes:
         df = pd.DataFrame(pagos_mes)
         st.dataframe(df, use_container_width=True)
     else:
         st.info("No hay pagos registrados para este mes")
+
+    # =========================
+    # PAGOS POR TURNO (SEGURO)
+    # =========================
+    pagos_por_turno = {}
+
+    for pago in pagos:
+        id_turno = pago.get("id_turno")
+        if not id_turno:
+            continue
+
+        pagos_por_turno[id_turno] = (
+            pagos_por_turno.get(id_turno, 0) + pago.get("monto", 0)
+        )
