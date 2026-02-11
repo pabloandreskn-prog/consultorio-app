@@ -13,7 +13,6 @@ def contar_sesiones_realizadas(turnos, id_paciente, id_servicio):
     )
 
 def marcar_turno_asistio(ws_turnos, fila, turno, todos_los_turnos):
-    """Actualiza el turno en la hoja de turnos."""
     id_servicio = turno.get("id_servicio")
     nombre_servicio = str(turno.get("nombre_servicio", ""))
     condicion = str(turno.get("condicion_turno", "GENERAL")).upper()
@@ -28,10 +27,9 @@ def marcar_turno_asistio(ws_turnos, fila, turno, todos_los_turnos):
     ws_turnos.update_cell(fila, 9, "ASISTIÓ")
     ws_turnos.update_cell(fila, 10, p_teorico)
     ws_turnos.update_cell(fila, 11, v_facturado)
-    return True
 
 def actualizar_contador_plan(sheet, id_paciente, id_servicio):
-    """Suma +1 en la columna E de la hoja 'planes_pacientes'."""
+    """Suma +1 en sesiones_usadas (Columna E)."""
     try:
         ws_planes = sheet.worksheet("planes_pacientes")
         planes = ws_planes.get_all_records()
@@ -40,9 +38,12 @@ def actualizar_contador_plan(sheet, id_paciente, id_servicio):
                 str(plan["id_servicio"]) == str(id_servicio) and 
                 str(plan["estado"]).upper() == "ACTIVO"):
                 
-                nueva_asistencia = int(plan.get("sesiones_usadas", 0)) + 1
-                # Fila = i + 2 (1 por encabezado + 1 por índice 0)
-                ws_planes.update_cell(i + 2, 5, nueva_asistencia)
+                nuevas = int(plan.get("sesiones_usadas", 0)) + 1
+                ws_planes.update_cell(i + 2, 5, nuevas)
+                
+                # Si completó el plan
+                if nuevas >= int(plan.get("sesiones_totales", 10)):
+                    ws_planes.update_cell(i + 2, 6, "FINALIZADO")
                 return True
     except Exception as e:
         st.error(f"Error actualizando plan: {e}")

@@ -16,26 +16,18 @@ def mes_de_fecha(fecha_str):
 # =====================================================
 
 def calcular_precio_teorico(id_servicio, nombre_servicio):
-    """
-    Devuelve el precio teórico base del servicio.
-    """
-    # PLANES (precio por sesión)
-    if "PLAN x5" in nombre_servicio:
-        return 110000 // 5
-
-    if "PLAN x10" in nombre_servicio:
-        return 200000 // 10
-
-    # SESIONES
+    """Devuelve el precio base del servicio desde la tabla servicios."""
+    # Precios fijos según tu tabla de servicios
     precios = {
-        1: 36000,   # Evaluación
+        1: 36000,   # Evaluacion
         2: 36000,   # Sesión Especializada
         3: 24000,   # Sesión individual
+        4: 110000,  # PLAN x5
+        5: 200000,  # PLAN x10
         6: 25000,   # Zona A
         7: 25000,   # Zona B
         8: 38000,   # Completo
     }
-
     return precios.get(int(id_servicio), 0)
 
 
@@ -80,36 +72,31 @@ def es_primera_evaluacion(turno, turnos_paciente):
 # DEUDA
 # =====================================================
 
-def detectar_deuda(turnos, mes=None):
-    deuda = []
-    for t in turnos:
-        fecha = t.get("fecha")
-        if not fecha:
-            continue
-
-        if mes and not fecha.startswith(mes):
-            continue
-
-        precio = int(t.get("precio_teorico", 0) or 0)
-        facturado = int(t.get("valor_facturado", 0) or 0)
-
-        if precio > facturado:
-            deuda.append({
-                "paciente": t.get("nombre_paciente"),
-                "fecha": fecha,
-                "servicio": t.get("nombre_servicio"),
-                "deuda": precio - facturado
-            })
-    return deuda
-
-def calcular_deuda_turno(turno):
-    try:
-        precio = int(turno.get("precio_teorico", 0) or 0)
-        facturado = int(turno.get("valor_facturado", 0) or 0)
-        deuda = precio - facturado
-        return max(deuda, 0)
-    except:
-        return 0
+def obtener_deuda_paciente(id_paciente, planes, pagos, servicios):
+    """
+    Lógica Liliana: Suma (Precio Servicio - Pagos Realizados) 
+    solo para planes que el paciente tenga activos.
+    """
+    deuda_total = 0
+    # 1. Filtrar planes activos del paciente
+    planes_activos = [p for p in planes if str(p['id_paciente']) == str(id_paciente) and str(p['estado']).upper() == 'ACTIVO']
+    
+    for plan in planes_activos:
+        id_serv = str(plan['id_servicio'])
+        # Buscamos precio en servicios
+        serv_info = next((s for s in servicios if str(s['id_servicio']) == id_serv), None)
+        if not serv_info: continue
+        
+        precio_servicio = float(serv_info.get('precio', 0))
+        
+        # Sumamos pagos del paciente para ESTE servicio específico
+        pagado = sum(float(p['monto']) for p in pagos 
+                     if str(p.get('id_paciente')) == str(id_paciente) 
+                     and str(p.get('id_servicio')) == id_serv)
+        
+        deuda_total += (precio_servicio - pagado)
+    
+    return max(0, deuda_total)
 
 
 # =====================================================
