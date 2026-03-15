@@ -8,14 +8,10 @@ def get_client():
         st.error("Secrets no configurados correctamente en la web de Streamlit.")
         st.stop()
     
-    # Convertimos los secretos a un diccionario real
     info = dict(st.secrets["gcp_service_account"])
     
-    # LIMPIEZA QUIRÚRGICA:
     if "private_key" in info:
-        # Quitamos espacios en blanco accidentales al inicio y final
         pk = info["private_key"].strip()
-        # Si por alguna razón los saltos de línea se pegaron como texto literal "\n"
         pk = pk.replace("\\n", "\n")
         info["private_key"] = pk
     
@@ -26,9 +22,33 @@ def get_client():
         )
         return gspread.authorize(creds)
     except Exception as e:
-        # Esto nos dirá si el problema es de formato o de permisos
         st.error(f"Error en la autenticación: {e}")
         st.stop()
 
 def get_sheet(sheet_name):
     return get_client().open(sheet_name)
+
+def obtener_siguiente_id(worksheet_name, id_column_name="id"):
+    """
+    Busca el ID más alto en la columna especificada y devuelve el siguiente.
+    """
+    try:
+        # Abrimos la hoja 'Consultorio' y la pestaña específica
+        sheet = get_sheet("Consultorio")
+        ws = sheet.worksheet(worksheet_name)
+        data = ws.get_all_records()
+        
+        if not data:
+            return 1
+            
+        # Extraemos los IDs asegurándonos de que sean números
+        ids = []
+        for row in data:
+            val = row.get(id_column_name)
+            if str(val).isdigit():
+                ids.append(int(val))
+        
+        return max(ids) + 1 if ids else 1
+    except Exception:
+        # Si algo falla (hoja vacía, columna inexistente), empezamos en 1
+        return 1
