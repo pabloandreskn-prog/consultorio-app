@@ -1,151 +1,95 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
-
+from datetime import datetime
 from data.sheets_client import get_sheet
-from domain.cierres import mes_esta_cerrado
-from ui.styles import aplicar_estilos_globales
 
-# =========================
-# CARGA DE DATOS (SOLO DATOS, NO OBJETOS)
-# =========================
-@st.cache_data(ttl=300)
-def cargar_datos():
-    sheet = get_sheet("Consultorio")
+def obtener_siguiente_id(pagos_ws):
+    """Busca el primer número disponible (rellena huecos) o sigue la secuencia."""
+    try:
+        datos = pagos_ws.get_all_records()
+        if not datos:
+            return 1
+        
+        ids_existentes = []
+        for d in datos:
+            try:
+                ids_existentes.append(int(d.get("id_pago", 0)))
+            except:
+                continue
+        
+        if not ids_existentes:
+            return 1
+            
+        ids_existentes.sort()
+        
+        for i in range(1, max(ids_existentes) + 1):
+            if i not in ids_existentes:
+                return i
+        
+        return max(ids_existentes) + 1
+    except:
+        return 1
 
-    pagos = sheet.worksheet("pagos").get_all_records()
-    cierres = sheet.worksheet("cierres").get_all_records()
-
-    return {
-        "pagos": pagos,
-        "cierres": cierres
-    }
-
-# =========================
-# HELPERS
-# =========================
-def es_pago_sospechoso(pagos, paciente, fecha, monto, metodo):
-    for p in pagos:
-        if (
-            p.get("paciente") == paciente
-            and p.get("fecha") == fecha
-            and str(p.get("monto")) == str(monto)
-            and p.get("metodo") == metodo
-        ):
-            return True
-    return False
-def generar_id_numerico(pagos):
-    """
-    Devuelve el próximo ID numérico disponible.
-    Ignora IDs no numéricos (UUID viejos).
-    """
-    ids_numericos = []
-
-    for p in pagos:
-        try:
-            ids_numericos.append(int(p.get("id_pago")))
-        except (TypeError, ValueError):
-            continue
-
-    return max(ids_numericos, default=0) + 1
-
-# =========================
-# UI PAGOS
-# =========================
 def pagos_ui():
-    aplicar_estilos_globales()
-    st.header("💰 Pagos")
+    st.subheader("💰 Registro de Pagos")
+    
+    try:
+        sheet = get_sheet("Consultorio")
+        turnos_data = sheet.worksheet("turnos").get_all_records()
+        
+        dict_pacientes = {t["nombre_paciente"]: t["id_paciente"] for t in turnos_data if t.get("nombre_paciente")}
+        dict_servicios = {t["nombre_paciente"]: t["id_servicio"] for t in turnos_data if t.get("nombre_paciente")}
+        
+        lista_pacientes = sorted(list(dict_pacientes.keys()))
+    except Exception as e:
+        st.error(f"Error de conexión: {e}")
+        return
 
-    datos = cargar_datos()
-    pagos = datos["pagos"]
-    cierres = datos["cierres"]
+    with st.form("form_nuevo_pago", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            paciente_sel = st.selectbox("Seleccione Paciente", lista_pacientes)
+            monto = st.number_input("Monto abonado ($)", min_value=0, step=1000)
+            metodo = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "Débito", "Crédito"])
+        with col2:
+            # CAMBIO QUIRÚRGICO: Sustituimos el selectbox de mes por calendario
+            fecha_cobro_dt = st.date_input("Fecha de Cobro", datetime.now())
+            nota = st.text_input("Nota / Concepto (Opcional)")
 
-    # =========================
-    # SELECCIÓN DE MES
-    # =========================
-    meses = sorted({p["mes"] for p in pagos if p.get("mes")})
+        submitted = st.form_submit_button("💾 Guardar Pago")
 
-    mes_actual = date.today().strftime("%Y-%m")
-    if mes_actual not in meses:
-        meses.append(mes_actual)
+        if submitted and monto > 0:
+            try:
+                pagos_ws = sheet.worksheet("pagos")
+                nuevo_id = obtener_siguiente_id(pagos_ws)
+                
+                # Extraemos el mes en formato YYYY-MM para las estadísticas
+                mes_estadistica = fecha_cobro_dt.strftime("%Y-%m")
+                
+                nueva_fila = [
+                    nuevo_id,                                    # id_pago
+                    fecha_cobro_dt.strftime("%Y-%m-%d"),         # fecha de cobro elegida
+                    mes_estadistica,                             # mes (para dashboard/stats)
+                    paciente_sel,                                # paciente
+                    float(monto),                                # monto
+                    metodo,                                      # metodo
+                    nota,                                        # observacion
+                    dict_pacientes.get(paciente_sel, ""),        # id_paciente
+                    dict_servicios.get(paciente_sel, "")         # id_servicio
+                ]
+                
+                pagos_ws.append_row(nueva_fila)
+                st.success(f"✅ Pago #{nuevo_id} registrado para {paciente_sel}")
+                st.cache_data.clear()
+            except Exception as e:
+                st.error(f"Error al guardar: {e}")
 
-    mes = st.selectbox("Mes", sorted(meses))
-
-    cerrado = mes_esta_cerrado(cierres, mes)
-
-    if cerrado:
-        st.warning(f"🔒 El mes {mes} está cerrado. No se pueden registrar pagos.")
-
-    # =========================
-    # FORMULARIO NUEVO PAGO
-    # =========================
-    st.subheader("➕ Registrar pago")
-
-    if not cerrado:
-        with st.form("form_pago"):
-            fecha = st.date_input("Fecha", value=date.today())
-            paciente = st.text_input("Paciente")
-            monto = st.number_input("Monto", min_value=0, step=100)
-            metodo = st.selectbox(
-                "Método de pago",
-                ["Efectivo", "Transferencia", "Tarjeta", "Otro"]
-            )
-            observacion = st.text_area("Observación")
-
-            submitted = st.form_submit_button("Guardar pago")
-
-        if submitted:
-            fecha_str = fecha.strftime("%Y-%m-%d")
-            mes_str = fecha.strftime("%Y-%m")
-
-            if es_pago_sospechoso(pagos, paciente, fecha_str, monto, metodo):
-                st.warning(
-                    "⚠️ Ya existe un pago con los mismos datos "
-                    "(paciente, fecha, monto y método)."
-                )
-
-            nuevo_pago = [
-                str(uuid.uuid4()),
-                fecha_str,
-                mes_str,
-                paciente,
-                monto,
-                metodo,
-                observacion
-            ]
-
-            # 🔑 OBJETO FRESCO PARA ESCRIBIR
-            sheet = get_sheet("Consultorio")
-            ws_pagos = sheet.worksheet("pagos")
-            ws_pagos.append_row(nuevo_pago)
-
-            st.success("✅ Pago registrado correctamente")
-            st.rerun()
-
-    # =========================
-    # LISTADO DE PAGOS
-    # =========================
     st.divider()
-    st.subheader("📋 Pagos registrados")
-
-    pagos_mes = [p for p in pagos if p.get("mes") == mes]
-
-    if pagos_mes:
-        df = pd.DataFrame(pagos_mes)
-        st.dataframe(df, use_container_width=True)
-    else:
-        st.info("No hay pagos registrados para este mes")
-
-    # =========================
-    # PAGOS POR TURNO (SEGURO)
-    # =========================
-    pagos_por_turno = {}
-
-    for pago in pagos:
-        id_turno = pago.get("id_turno")
-        if not id_turno:
-            continue
-
-        pagos_por_turno[id_turno] = (
-            pagos_por_turno.get(id_turno, 0) + pago.get("monto", 0)
-        )
+    st.markdown("### 📄 Últimos movimientos")
+    try:
+        pagos_raw = sheet.worksheet("pagos").get_all_records()
+        if pagos_raw:
+            # Mostramos los últimos 10 de forma descendente
+            df_pagos = pd.DataFrame(pagos_raw)
+            st.dataframe(df_pagos.tail(10).iloc[::-1], use_container_width=True)
+    except: pass

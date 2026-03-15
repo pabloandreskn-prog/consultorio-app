@@ -2,8 +2,6 @@ import streamlit as st
 
 from datetime import date, timedelta
 
-
-
 from domain.cierres import mes_esta_cerrado
 
 from domain.agenda_logic import (
@@ -25,47 +23,29 @@ from domain.agenda_logic import (
 
 
 # =========================
-
 # HELPERS
-
 # =========================
-
-
 
 def generar_horarios():
 
     return [f"{h:02d}:00" for h in range(8, 21)]
 
-
-
 def siguiente_id_turno(turnos):
-
     ids = [int(t["id_turno"]) for t in turnos if str(t.get("id_turno")).isdigit()]
-
     return max(ids) + 1 if ids else 1
 
-
-
 def extraer_sesiones(nombre_servicio):
-
     numeros = "".join(filter(str.isdigit, nombre_servicio))
-
     return int(numeros) if numeros else 1
 
 
 
 def generar_fechas_plan(fecha_inicio, d_semana, sesiones):
-
     fechas = []
-
     fecha = fecha_inicio
-
     while len(fechas) < sesiones:
-
         if fecha.weekday() in d_semana:
-
             fechas.append(fecha)
-
         fecha += timedelta(days=1)
 
     return fechas
@@ -73,46 +53,29 @@ def generar_fechas_plan(fecha_inicio, d_semana, sesiones):
 
 
 def sesiones_acumuladas(id_paciente, id_servicio, planes_pacientes):
-
     """Busca asistencias y totales en la lista de planes."""
-
     for plan in planes_pacientes:
 
         p_id_match = str(plan.get("id_paciente")) == str(id_paciente)
-
         s_id_match = str(plan.get("id_servicio")) == str(id_servicio)
-
         es_activo = str(plan.get("estado", "")).upper() == "ACTIVO"
-
         
 
         if p_id_match and s_id_match and es_activo:
-
             return (
-
                 int(plan.get("sesiones_usadas", 0)), 
-
                 int(plan.get("sesiones_totales", 0))
-
             )
-
     return 0, 0
 
 
-
 # =========================
-
 # AGENDA UI
-
 # =========================
-
-
 
 def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
 
     st.title("📅 Agenda")
-
-
 
     # --- GESTIÓN DE CACHÉ ---
 

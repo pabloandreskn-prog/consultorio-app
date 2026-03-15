@@ -1,231 +1,141 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
-
+import plotly.express as px
+import io
 from data.sheets_client import get_sheet
 from ui.styles import aplicar_estilos_globales
+from domain.finanzas import calcular_participacion_dashboard
 
-from domain.finanzas import (
-    mes_esta_cerrado,
-    calcular_cierre_mes,
-    calcular_participacion_turno, calcular_precio_teorico, es_primera_evaluacion
-)
+def limpiar_monto(valor):
+    if valor == "" or valor is None: return 0.0
+    try:
+        if isinstance(valor, str):
+            v = valor.replace('$', '').replace('.', '').replace(',', '.').strip()
+            return float(v)
+        return float(valor)
+    except: return 0.0
 
-from domain.pdf_reportes import generar_pdf_liquidacion
-from domain.insights_financieros import (
-    evaluar_salud_mes,
-    detectar_riesgos,
-    generar_alertas_accionables
-)
+@st.cache_data(ttl=60)
+def cargar_datos_dashboard():
+    try:
+        sheet = get_sheet("Consultorio")
+        return {
+            "turnos": sheet.worksheet("turnos").get_all_records(),
+            "pagos": sheet.worksheet("pagos").get_all_records(),
+            "ventas": sheet.worksheet("ventas").get_all_records(),
+            "servicios": sheet.worksheet("servicios").get_all_records()
+        }
+    except Exception as e:
+        st.error(f"Error de conexión: {e}")
+        return None
 
-# =========================
-# CARGA DE DATOS
-# =========================
-@st.cache_data(ttl=300)
-def cargar_datos():
-    sheet = get_sheet("Consultorio")
-    return {
-        "turnos": sheet.worksheet("turnos").get_all_records(),
-        "pagos": sheet.worksheet("pagos").get_all_records(),
-        "cierres": sheet.worksheet("cierres").get_all_records(),
-    }
-
-# =========================
-# EXPORTADOR EXCEL
-# =========================
-def generar_excel_cesion(mes, filas, resumen, cerrado, sesiones, bonificado):
-    df = pd.DataFrame(filas)
-
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, sheet_name="Detalle Cesión", index=False, startrow=10)
-        worksheet = writer.sheets["Detalle Cesión"]
-
-        worksheet.write("A1", "PARTICIPACIÓN ENJOY")
-        worksheet.write("A2", f"Mes: {mes}")
-        worksheet.write("A3", f"Estado: {'CERRADO' if cerrado else 'PROVISORIO'}")
-
-        worksheet.write("F1", "Resumen General")
-        worksheet.write("F2", "Total Facturado")
-        worksheet.write("G2", resumen["total_facturado"])
-        worksheet.write("F3", "Total Cedido")
-        worksheet.write("G3", resumen["total_espacio"])
-        worksheet.write("F4", "Neto Profesional")
-        worksheet.write("G4", resumen["neto_profesional"])
-
-        worksheet.write("A6", "Sesiones Socios Gym")
-        worksheet.write("B6", sesiones["SOCIO_GYM"])
-        worksheet.write("A7", "Sesiones General")
-        worksheet.write("B7", sesiones["GENERAL"])
-
-        worksheet.write("A8", "Bonificado Socios Gym")
-        worksheet.write("B8", bonificado["SOCIO_GYM"])
-        worksheet.write("A9", "Bonificado General")
-        worksheet.write("B9", bonificado["GENERAL"])
-
-        worksheet.set_column("A:A", 26)
-        worksheet.set_column("B:G", 18)
-
-    output.seek(0)
-    return output
-
-# =========================
-# DASHBOARD
-# =========================
 def dashboard_ui():
     aplicar_estilos_globales()
+    st.markdown("## 📊 Dashboard de Inteligencia Financiera")
 
-    st.markdown("## 📊 Dashboard financiero")
-    st.caption("Análisis profesional de facturación y cesión al gimnasio")
+    datos = cargar_datos_dashboard()
+    if not datos: return
 
-    datos = cargar_datos()
-    turnos = datos["turnos"]
-    pagos = datos["pagos"]
-    cierres = datos["cierres"]
+    turnos, pagos, ventas, servicios = datos["turnos"], datos["pagos"], datos["ventas"], datos["servicios"]
+    dict_servicios = {str(s['id_servicio']): s['nombre'] for s in servicios}
 
-    if not turnos:
-        st.info("No hay datos disponibles")
-        return
+    meses = sorted(list({str(v.get("fecha", ""))[:7] for v in ventas if len(str(v.get("fecha", ""))) >= 7}), reverse=True)
+    if not meses: return
+    mes_sel = st.selectbox("📅 Seleccione mes a analizar", meses)
 
-    meses = sorted({t["fecha"][:7] for t in turnos if t.get("fecha")})
-    mes = st.selectbox("Mes", meses)
+    # --- CÁLCULOS ---
+    ventas_mes = [v for v in ventas if str(v.get("fecha", "")).startswith(mes_sel)]
+    facturado_mes = sum(limpiar_monto(v.get("monto_total", 0)) for v in ventas_mes)
+    cobrado_mes = sum(limpiar_monto(p.get("monto", 0)) for p in pagos if str(p.get("fecha", "")).startswith(mes_sel))
+    
+    total_v_hist = sum(limpiar_monto(v.get("monto_total", 0)) for v in ventas)
+    total_p_hist = sum(limpiar_monto(p.get("monto", 0)) for p in pagos)
+    deuda_total = max(0, total_v_hist - total_p_hist)
 
-# ... (código previo del selectbox de mes)
-
+    # --- MÉTRICAS SUPERIORES ---
+    st.markdown("---")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("💼 Facturado", f"${facturado_mes:,.0f}")
+    m2.metric("💰 Cobrado", f"${cobrado_mes:,.0f}")
+    m3.metric("⚠️ Deuda Global", f"${deuda_total:,.0f}", delta_color="inverse")
+    
+    cedido_total = 0
+    bonif_socios, bonif_gral = 0, 0
+    socios_count, gral_count = 0, 0
     filas_detalle = []
-    sesiones = {"SOCIO_GYM": 0, "GENERAL": 0}
-    bonificado = {"SOCIO_GYM": 0, "GENERAL": 0}
 
     for t in turnos:
-            if not t.get("fecha", "").startswith(mes) or t.get("estado") != "ASISTIÓ":
-                continue
+        if str(t.get("fecha", "")).startswith(mes_sel) and t.get("estado") == "ASISTIÓ":
+            v_data = next((v for v in ventas if str(v.get('id_paciente')) == str(t.get('id_paciente')) 
+                           and str(v.get('id_servicio')) == str(t.get('id_servicio'))), {})
+            
+            es_bonif = str(v_data.get("bonificado (Si/No)", "")).upper() == "SI"
+            es_eva = "EVALUACION" in str(t.get("nombre_servicio", "")).upper()
+            es_socio = "SOCIO" in str(t.get("condicion_turno", "")).upper()
+            pct_texto = "30%" if es_socio else "20%"
 
-            condicion = str(t.get("condicion_turno", "GENERAL")).upper()
-            tipo = "SOCIO_GYM" if condicion == "SOCIO_GYM" else "GENERAL"
-            sesiones[tipo] += 1
+            res = calcular_participacion_dashboard(t, turnos)
+            cedido_total += res["participacion"]
 
-            # 1. Obtener datos básicos
-            id_serv = t.get("id_servicio", 0)
-            nom_serv = str(t.get("nombre_servicio", ""))
-            v_facturado = int(t.get("valor_facturado", 0) or 0)
-            v_teorico_full = calcular_precio_teorico(id_serv, nom_serv)
+            if es_socio: socios_count += 1
+            else: gral_count += 1
 
-            # 2. Verificar si es Primera Evaluación
-            # Filtramos los turnos de este paciente para la función educativa
-            turnos_paciente = [tp for tp in turnos if tp.get("id_paciente") == t.get("id_paciente")]
-            es_primera = es_primera_evaluacion(t, turnos_paciente)
-            es_servicio_eval = nom_serv.lower().startswith("evaluacion")
-
-            # 3. LÓGICA DE BONIFICACIÓN SEGÚN TU REGLA
-            monto_bonificado = 0
-        
-            if es_servicio_eval and es_primera:
-                if tipo == "SOCIO_GYM":
-                    # BONIF 100% -> El ahorro es el total del precio
-                    monto_bonificado = v_teorico_full 
-                else:
-                    # GENERAL: BONIF 50% -> El ahorro es la mitad
-                    monto_bonificado = v_teorico_full * 0.5
-            else:
-                # Si NO es primera evaluación o es otro servicio, 
-                # la bonificación es solo si cobraste menos del teórico por otra razón
-                monto_bonificado = max(0, v_teorico_full - v_facturado)
-
-            bonificado[tipo] += monto_bonificado
-
-            # 4. Cálculo de participación (Comisión Gimnasio)
-            calc = calcular_participacion_turno(t, None, turnos)
+            if es_bonif:
+                m_bonif = res.get("bonificacion", 0)
+                if es_socio: bonif_socios += m_bonif
+                else: bonif_gral += m_bonif
 
             filas_detalle.append({
-                "Fecha": t["fecha"],
-                "Paciente": t["nombre_paciente"],
-                "Servicio": nom_serv,
-                "1° Eval": "SÍ" if (es_servicio_eval and es_primera) else "NO",
-                "Bruto ($)": v_facturado,
-                "Bonificación ($)": int(monto_bonificado),
-                "Porcentaje Espacio": f"{calc['porcentaje']}%",
-                "Monto Espacio ($)": calc["participacion"],
-                "Neto Profesional ($)": calc["neto"]
+                "Fecha": t["fecha"], "Paciente": t["nombre_paciente"], "Servicio": t["nombre_servicio"],
+                "1° Eval": "SÍ" if es_eva else "NO", "Bruto ($)": res["bruto"],
+                "Bonificación ($)": res.get("bonificacion", 0), "Porcentaje Espacio": pct_texto,
+                "Monto Espacio ($)": res["participacion"], "Neto Profesional ($)": res["neto"]
             })
 
-    # ... (continúa con el resto de la UI de Streamlit)
+    m4.metric("🏢 Cedido Enjoy", f"${cedido_total:,.0f}")
 
-    cerrado = mes_esta_cerrado(cierres, mes)
+    # --- PARTICIPACIÓN ENJOY (VISTA) ---
+    st.markdown("### 🏢 PARTICIPACIÓN ENJOY")
+    c_s1, c_s2, c_s3 = st.columns(3)
+    c_s1.write(f"**Total Facturado:** ${facturado_mes:,.0f}")
+    with c_s2:
+        st.write(f"🏋️ Socios Gym: {socios_count}")
+        st.write(f"👥 General: {gral_count}")
+    with c_s3:
+        st.write(f"🏋️ Bonif. Socios: ${bonif_socios:,.0f}")
+        st.write(f"👥 Bonif. General: ${bonif_gral:,.0f}")
 
-    if cerrado:
-        cierre = next(c for c in cierres if c["mes"] == mes)
-        total_facturado = cierre["total_facturado"]
-        total_cobrado = cierre["total_cobrado"]
-        total_deuda = 0
-    else:
-        cierre_preview = calcular_cierre_mes(turnos, pagos, mes)
-        total_facturado = cierre_preview["total_facturado"]
-        total_cobrado = cierre_preview["total_cobrado"]
-        total_deuda = total_facturado - total_cobrado
+    # --- DETALLE Y DESCARGA TAL CUAL XLSX ---
+    st.markdown("---")
+    h_col, d_col = st.columns([3, 1])
+    h_col.subheader("📋 Detalle de Liquidación por Sesión")
+    
+    if filas_detalle:
+        df_liq = pd.DataFrame(filas_detalle)
+        
+        # CONSTRUCCIÓN DEL REPORTE IGUAL AL XLSX
+        output = io.StringIO()
+        output.write(f"PARTICIPACIÓN ENJOY,,,,,Resumen General\n")
+        output.write(f"Mes: {mes_sel},,,,,Total Facturado,{facturado_mes}\n")
+        output.write(f"Estado: CERRADO,,,,,Total Cedido,{cedido_total}\n")
+        output.write(f",,,,,Neto Profesional,{facturado_mes - cedido_total}\n\n")
+        output.write(f"Sesiones Socios Gym,{socios_count}\n")
+        output.write(f"Sesiones General,{gral_count}\n")
+        output.write(f"Bonificado Socios Gym,{bonif_socios}\n")
+        output.write(f"Bonificado General,{bonif_gral}\n\n")
+        
+        # Agregamos la tabla de detalle
+        df_liq.to_csv(output, index=False)
+        
+        with d_col:
+            st.download_button(
+                label="📥 Descargar Reporte Completo",
+                data=output.getvalue(),
+                file_name=f"estudio_cesion_{mes_sel}.csv",
+                mime="text/csv"
+            )
 
-    total_cedido = sum(f["Monto Espacio ($)"] for f in filas_detalle)
-    neto_prof = sum(f["Neto Profesional ($)"] for f in filas_detalle)
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💼 Facturado", f"${int(total_facturado)}")
-    col2.metric("💰 Cobrado", f"${int(total_cobrado)}")
-    col3.metric("⚠️ Deuda", f"${int(total_deuda)}")
-    col4.metric("🏢 Cedido al Gimnasio", f"${int(total_cedido)}")
-
-
-    st.divider()
-    st.subheader("🏢 PARTICIPACIÓN ENJOY")
-
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Total facturado", f"${int(total_facturado)}")
-
-    col_b.markdown(
-        f"**Sesiones atendidas**\n\n"
-        f"🏋️ Socios Gym: {sesiones['SOCIO_GYM']}\n\n"
-        f"👤 General: {sesiones['GENERAL']}"
-    )
-
-    col_c.markdown(
-        f"**Total bonificado**\n\n"
-        f"🏋️ Socios Gym: ${int(bonificado['SOCIO_GYM'])}\n\n"
-        f"👤 General: ${int(bonificado['GENERAL'])}"
-    )
-
-    st.divider()
-    st.dataframe(pd.DataFrame(filas_detalle), use_container_width=True)
-
-    st.divider()
-    st.subheader("📥 Exportar estudio de cesión")
-
-    excel = generar_excel_cesion(
-        mes,
-        filas_detalle,
-        {
-            "total_facturado": total_facturado,
-            "total_espacio": total_cedido,
-            "neto_profesional": neto_prof
-        },
-        cerrado,
-        sesiones,
-        bonificado
-    )
-
-    st.download_button(
-        "⬇️ Descargar estudio en Excel",
-        excel,
-        f"estudio_cesion_gimnasio_{mes}.xlsx"
-    )
-
-    if st.button("📄 Generar PDF de liquidación"):
-        generar_pdf_liquidacion(
-            archivo=f"liquidacion_{mes}.pdf",
-            mes=mes,
-            resumen={
-                "total_facturado": total_facturado,
-                "total_espacio": total_cedido,
-                "neto_profesional": neto_prof,
-            },
-            detalle_turnos=filas_detalle,
-            definitivo=cerrado
-        )
-        st.success("PDF generado correctamente")
+        st.dataframe(df_liq.style.format({
+            "Bruto ($)": "${:,.0f}", "Bonificación ($)": "${:,.0f}",
+            "Monto Espacio ($)": "${:,.0f}", "Neto Profesional ($)": "${:,.0f}"
+        }), use_container_width=True)

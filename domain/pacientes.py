@@ -1,9 +1,9 @@
-import uuid
 from datetime import datetime
 
-def nuevo_paciente(nombre, dni, telefono, tipo_cliente, observaciones=""):
+# Agregamos id_numerico como parámetro
+def nuevo_paciente(id_numerico, nombre, dni, telefono, tipo_cliente, observaciones=""):
     return {
-        "id_paciente": str(uuid.uuid4()),
+        "id_paciente": id_numerico, # Ahora usa el número que le pasamos
         "nombre": nombre,
         "dni": dni,
         "telefono": telefono,
