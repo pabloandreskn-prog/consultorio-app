@@ -13,9 +13,15 @@ def get_client():
         st.error("Error: No se encontraron los Secrets 'gcp_service_account'.")
         st.stop()
         
+    # Crear una copia limpia del diccionario
     info = dict(st.secrets["gcp_service_account"])
+    
+    # REPARACIÓN NIVEL DIOS: 
+    # Forzar la interpretación de caracteres de escape y limpiar espacios laterales
     if "private_key" in info:
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
+        raw_key = info["private_key"].strip()
+        # Esto convierte los \n de texto en saltos de línea binarios reales
+        info["private_key"] = raw_key.encode().decode('unicode_escape').replace("\\n", "\n")
     
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
@@ -25,13 +31,11 @@ def get_sheet(sheet_name):
     return client.open(sheet_name)
 
 def obtener_siguiente_id(worksheet_name, id_column_name="id"):
-    """Función auxiliar para autogenerar IDs en las hojas de cálculo"""
     try:
         sheet = get_sheet("Consultorio")
         ws = sheet.worksheet(worksheet_name)
         data = ws.get_all_records()
-        if not data:
-            return 1
+        if not data: return 1
         ids = [int(row[id_column_name]) for row in data if str(row[id_column_name]).isdigit()]
         return max(ids) + 1 if ids else 1
     except Exception:
