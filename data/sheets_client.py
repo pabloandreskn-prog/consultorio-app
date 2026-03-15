@@ -13,18 +13,28 @@ def get_client():
         st.error("Error: No se encontraron los Secrets 'gcp_service_account'.")
         st.stop()
         
-    # Crear una copia limpia del diccionario
     info = dict(st.secrets["gcp_service_account"])
     
-    # REPARACIÓN NIVEL DIOS: 
-    # Forzar la interpretación de caracteres de escape y limpiar espacios laterales
     if "private_key" in info:
-        raw_key = info["private_key"].strip()
-        # Esto convierte los \n de texto en saltos de línea binarios reales
-        info["private_key"] = raw_key.encode().decode('unicode_escape').replace("\\n", "\n")
-    
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    return gspread.authorize(creds)
+        pk = info["private_key"]
+        # 1. Quitar comillas accidentales al inicio/final
+        pk = pk.strip("'").strip('"')
+        # 2. Convertir los \n literales en saltos de línea reales
+        pk = pk.replace("\\n", "\n")
+        # 3. Si por alguna razón se pegó todo en una línea sin \n (pasa a veces), 
+        # intentamos reconstruir los saltos básicos del formato PEM
+        if "-----BEGIN PRIVATE KEY-----" in pk and "\n" not in pk.replace("-----BEGIN PRIVATE KEY-----", ""):
+             pk = pk.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+             pk = pk.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
+        
+        info["private_key"] = pk
+
+    try:
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"Error crítico al configurar credenciales: {e}")
+        st.stop()
 
 def get_sheet(sheet_name):
     client = get_client()
@@ -38,5 +48,4 @@ def obtener_siguiente_id(worksheet_name, id_column_name="id"):
         if not data: return 1
         ids = [int(row[id_column_name]) for row in data if str(row[id_column_name]).isdigit()]
         return max(ids) + 1 if ids else 1
-    except Exception:
-        return 1
+    except: return 1
