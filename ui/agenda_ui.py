@@ -43,15 +43,12 @@ def sesiones_acumuladas(id_paciente, id_servicio, planes_pacientes):
     return 0, 0
 
 def obtener_deuda_paciente(id_paciente, sheet):
-    """Calcula la deuda sumando ventas y restando pagos."""
     from ui.recepcion_ui import limpiar_monto
     try:
         ventas = sheet.worksheet("ventas").get_all_records()
         pagos = sheet.worksheet("pagos").get_all_records()
-        
         total_venta = sum(limpiar_monto(v.get("monto_total", 0)) for v in ventas if str(v.get("id_paciente")) == str(id_paciente))
         total_pago = sum(limpiar_monto(p.get("monto", 0)) for p in pagos if str(p.get("id_paciente")) == str(id_paciente))
-        
         return total_venta - total_pago
     except:
         return 0.0
@@ -62,9 +59,9 @@ def obtener_deuda_paciente(id_paciente, sheet):
 def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
     st.title("📅 Agenda")
 
-    # Gestión de Caché original
     if "ws_turnos" not in st.session_state: st.session_state.ws_turnos = sheet.worksheet("turnos")
     if "ws_planes" not in st.session_state: st.session_state.ws_planes = sheet.worksheet("planes_pacientes")
+    if "ws_ventas" not in st.session_state: st.session_state.ws_ventas = sheet.worksheet("ventas")
     
     if "turnos" not in st.session_state:
         st.session_state.turnos = st.session_state.ws_turnos.get_all_records()
@@ -77,7 +74,7 @@ def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
     fecha_vista = st.date_input("📅 Ver agenda del día", value=date.today())
     turnos_dia = [(i + 2, t) for i, t in enumerate(turnos) if t.get("fecha") == str(fecha_vista)]
 
-    # --- VISTA DE BLOQUES (Con lógica de Deuda y Contraste Dark) ---
+    # --- VISTA DE BLOQUES (DISEÑO VERDE ORIGINAL RESTAURADO) ---
     st.subheader("🟩 Turnos del día")
     if turnos_dia:
         cols = st.columns(4)
@@ -85,40 +82,26 @@ def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
             usadas, totales = sesiones_acumuladas(t["id_paciente"], t["id_servicio"], planes_actuales)
             deuda = obtener_deuda_paciente(t["id_paciente"], sheet)
             
-            # Color de fondo: Prioridad Rojo si debe, sino Verde/Naranja según asistencia
+            # Colores originales suaves
+            bg_color = "rgba(96,176,103,0.18)" # Verde suave original
+            border_color = "rgba(96,176,103,0.45)"
+            
             if deuda > 0:
-                bg_color = "rgba(255, 75, 75, 0.2)"   # Rojo suave
-                border_color = "rgba(255, 75, 75, 0.6)"
-            elif t.get("estado") == "ASISTIÓ":
-                bg_color = "rgba(96,176,103,0.2)"    # Verde
-                border_color = "rgba(96,176,103,0.5)"
-            else:
-                bg_color = "rgba(255,165,0,0.15)"    # Naranja
-                border_color = "rgba(255,165,0,0.5)"
+                bg_color = "rgba(255, 75, 75, 0.15)" # Alerta deuda sutil
+                border_color = "rgba(255, 75, 75, 0.4)"
 
             with cols[i % 4]:
                 alerta_deuda = f"<br><b style='color: #FF4B4B;'>⚠️ DEBE ${deuda:,.0f}</b>" if deuda > 0 else ""
                 st.markdown(f"""
-                    <div style="
-                        background-color: {bg_color}; 
-                        padding: 15px; 
-                        border-radius: 12px; 
-                        border: 1px solid {border_color}; 
-                        margin-bottom: 10px;
-                        color: inherit;
-                    ">
+                    <div style="background-color: {bg_color}; padding: 15px; border-radius: 12px; border: 1px solid {border_color}; margin-bottom: 10px; color: inherit;">
                         <b style="font-size: 1.1em;">🕒 {t['hora']}</b><br>
                         <span style="font-weight: 600;">{t['nombre_paciente']}</span>{alerta_deuda}<br>
-                        <div style="opacity: 0.8; font-size: 0.85em;">
-                            {t['nombre_servicio']}<br>
-                            📊 {usadas}/{totales} sesiones
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                        <div style="opacity: 0.8; font-size: 0.85em;">{t['nombre_servicio']}<br>📊 {usadas}/{totales} sesiones</div>
+                    </div>""", unsafe_allow_html=True)
     else:
         st.info("No hay turnos para este día")
 
-    # --- OPERACIÓN DEL DÍA (Acciones) ---
+    # --- OPERACIÓN DEL DÍA ---
     st.markdown("---")
     st.subheader("📋 Operación del día")
 
@@ -129,12 +112,8 @@ def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
 
         col1, col2, col3, col4, col5 = st.columns([2, 3, 1.5, 1.5, 1.5])
         col1.write(f"🕒 {t['hora']}")
-        
-        # Alerta de deuda en el nombre
         nombre_label = t['nombre_paciente']
-        if deuda_op > 0:
-            nombre_label += f" ⚠️ **(DEBE ${deuda_op:,.0f})**"
-        
+        if deuda_op > 0: nombre_label += f" ⚠️ **(DEBE ${deuda_op:,.0f})**"
         col2.write(f"**{nombre_label}**")
         col3.write(f"📊 {usadas_r}/{t_plan}")
 
@@ -145,36 +124,15 @@ def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
         else:
             if col4.button("✔️", key=f"as_btn_{t['id_turno']}"):
                 marcar_turno_asistio(st.session_state.ws_turnos, fila, t, turnos)
-                if str(t["id_servicio"]) in ["4", "5"]:
-                    actualizar_contador_plan(sheet, t["id_paciente"], t["id_servicio"])
+                if str(t["id_servicio"]) in ["4", "5"]: actualizar_contador_plan(sheet, t["id_paciente"], t["id_servicio"])
                 st.session_state.pop("turnos", None)
-                st.session_state.pop("planes_pacientes", None)
                 st.rerun()
-            
             if col5.button("🚫", key=f"canc_btn_{t['id_turno']}"):
                 marcar_turno_cancelado(st.session_state.ws_turnos, fila)
                 st.session_state.pop("turnos", None)
                 st.rerun()
 
-        # --- REGISTRO DE PAGO (Solo para sesiones individuales IDs 1, 2, 3) ---
-        if str(t["id_servicio"]) in ["1", "2", "3"] and estado_act != "CANCELADO":
-            with st.expander(f"💰 Cobrar {t['nombre_paciente']}"):
-                from ui.recepcion_ui import registrar_cobro_recepcion
-                metodo = st.selectbox("Método", ["Efectivo", "Transferencia", "MP"], key=f"met_{t['id_turno']}")
-                monto_val = st.number_input("Monto", value=24000, key=f"val_{t['id_turno']}")
-                if st.button("Confirmar Pago", key=f"pay_{t['id_turno']}"):
-                    datos = {
-                        "id_paciente": t["id_paciente"],
-                        "nombre_paciente": t["nombre_paciente"],
-                        "id_servicio": t["id_servicio"],
-                        "monto": monto_val,
-                        "metodo": metodo
-                    }
-                    if registrar_cobro_recepcion(datos):
-                        st.success("Pago registrado")
-                        st.rerun()
-
-    # --- FORMULARIO NUEVO TURNO (Restaurado original) ---
+    # --- FORMULARIO NUEVO TURNO ---
     st.markdown("---")
     st.subheader("➕ Crear turno / plan")
     pacientes_dict = {p["nombre"]: p for p in pacientes}
@@ -187,7 +145,7 @@ def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
         p_nombre = c1.selectbox("Paciente", pacientes_dict.keys())
         s_nombre = c2.selectbox("Servicio", servicios_dict.keys())
         h_turno = c3.selectbox("Hora", generar_horarios())
-
+        
         servicio_obj = servicios_dict[s_nombre]
         cant_sesiones = extraer_sesiones(servicio_obj["nombre"])
         es_plan = cant_sesiones > 1
@@ -199,18 +157,33 @@ def agenda_ui(sheet, pacientes, servicios, planes_pacientes):
 
         if st.form_submit_button("🟢 Crear turnos"):
             paciente_obj = pacientes_dict[p_nombre]
+            from ui.recepcion_ui import encontrar_proxima_fila_libre, limpiar_monto
+            
+            # CORRECCIÓN QUIRÚRGICA: Registrar Venta y Plan en el acto
+            id_v = encontrar_proxima_fila_libre(st.session_state.ws_ventas)
+            monto_total = limpiar_monto(servicio_obj.get("precio", 0))
+            
+            # 1. Insertar en VENTAS
+            st.session_state.ws_ventas.append_row([
+                id_v, str(fecha_ini), str(fecha_ini)[:7], paciente_obj["id_paciente"], 
+                paciente_obj["nombre"], servicio_obj["id_servicio"], 
+                paciente_obj.get("condicion", "GENERAL"), monto_total, "NO", "", cant_sesiones, 0
+            ])
+
+            # 2. Si es Plan, insertar en PLANES_PACIENTES
             if es_plan:
                 crear_entrada_plan(sheet, paciente_obj, servicio_obj, cant_sesiones, fecha_ini)
             
+            # 3. Insertar en TURNOS
             fechas_lista = generar_fechas_plan(fecha_ini, [dias_opciones[d] for d in dias_seleccionados], cant_sesiones) if (es_plan and dias_seleccionados) else [fecha_ini]
-            
             id_t = siguiente_id_turno(st.session_state.turnos)
             for f in fechas_lista:
                 st.session_state.ws_turnos.append_row([
                     id_t, str(f), h_turno, paciente_obj["id_paciente"], paciente_obj["nombre"],
                     paciente_obj.get("condicion", "GENERAL"), servicio_obj["id_servicio"],
-                    servicio_obj["nombre"], "RESERVADO", "", ""
+                    servicio_obj["nombre"], "RESERVADO", monto_total if not es_plan else monto_total/cant_sesiones, ""
                 ])
                 id_t += 1
-            st.session_state.pop("turnos", None)
+            
+            st.session_state.clear()
             st.rerun()
