@@ -51,4 +51,8 @@ def obtener_siguiente_id(worksheet_name, id_column_name="id"):
         return max(ids) + 1 if ids else 1
     except Exception:
         # Si algo falla (hoja vacía, columna inexistente), empezamos en 1
+<<<<<<< HEAD
         return 1
+=======
+        return 1
+>>>>>>> 359cd74a60f532b46dac154006f5cd950f24a29a
