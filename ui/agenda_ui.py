@@ -55,7 +55,7 @@ def obtener_siguiente_id_local(datos_lista, nombre_columna):
     except: return 1
 
 # --- INTERFAZ PRINCIPAL ---
-def agenda_ui(sheet, p_old, s_old, pl_old):
+def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
     datos = cargar_datos_seguros(sheet)
     ws = obtener_hojas_estaticas(sheet)
 
@@ -87,7 +87,7 @@ def agenda_ui(sheet, p_old, s_old, pl_old):
                     
                     us, tot = 0, 0
                     for pl in datos["planes"]:
-                        if str(pl.get("id_paciente")) == str(t["id_paciente"]) and str(pl.get("id_servicio")) == str(t["id_servicio"]):
+                        if str(pl.get("id_paciente")) == str(t["id_paciente"]) and str(pl.get("id_servicio")) == str(t["id_servicio"]) and pl.get("estado") == "ACTIVO":
                             us, tot = int(pl.get("sesiones_usadas", 0)), int(pl.get("sesiones_totales", 0))
                     
                     restantes = tot - us
@@ -128,37 +128,27 @@ def agenda_ui(sheet, p_old, s_old, pl_old):
                         with st.expander("⚙️ Gestión / Cobrar / Renovar"):
                             st.markdown("**💰 Registrar Pago**")
                             with st.form(f"f_pag_{t['id_turno']}"):
-                                m_c = st.number_input("Monto", value=0.0, key=f"mc_{t['id_turno']}")
+                                m_c = st.number_input("Monto", value=deuda if deuda > 0 else 0.0, key=f"mc_{t['id_turno']}")
                                 f_p = st.selectbox("Método", ["EFECTIVO", "TRANSFERENCIA", "MP"], key=f"fp_{t['id_turno']}")
                                 if st.form_submit_button("Confirmar Pago", use_container_width=True):
                                     fh = datetime.now().strftime("%Y-%m-%d")
                                     nid_p = obtener_siguiente_id_local(datos["pagos"], "id_pago")
                                     ws["pagos"].append_row([nid_p, fh, fh[:7], t["nombre_paciente"], m_c, f_p, "Agenda", t["id_paciente"], t["id_servicio"]])
-                                    st.success("✅ Pago registrado con éxito en Google Sheets")
+                                    st.success("✅ Pago registrado")
                                     time.sleep(1); st.cache_data.clear(); st.rerun()
 
                             st.divider()
-                            # REPROGRAMAR
-                            lista_h = generar_horarios()
-                            idx_h = lista_h.index(t['hora']) if t['hora'] in lista_h else 0
-                            f_rep = st.date_input("Nueva Fecha", value=pd.to_datetime(t['fecha']).date(), key=f"fr_{t['id_turno']}")
-                            h_rep = st.selectbox("Nueva Hora", lista_h, index=idx_h, key=f"hr_{t['id_turno']}")
-                            if st.button("Guardar Reprogramación", key=f"br_{t['id_turno']}", use_container_width=True):
-                                ws["turnos"].update_cell(fila, 2, str(f_rep))
-                                ws["turnos"].update_cell(fila, 3, h_rep)
-                                st.cache_data.clear(); st.rerun()
-
-                            st.divider()
-                            # RENOVAR
                             if st.button("🔄 Renovar Venta/Plan", key=f"ren_{t['id_turno']}", use_container_width=True):
                                 ser = next(s for s in datos["servicios"] if s["nombre"] == t["nombre_servicio"])
                                 pac = next(p for p in datos["pacientes"] if str(p["id_paciente"]) == str(t["id_paciente"]))
                                 fh = datetime.now().strftime("%Y-%m-%d")
                                 nid_v = obtener_siguiente_id_local(datos["ventas"], "id_venta")
-                                ws["ventas"].append_row([nid_v, fh, fh[:7], pac["id_paciente"], pac["nombre"], ser["id_servicio"], pac.get("condicion_turno","GENERAL"), limpiar_monto(ser.get("precio_teorico", 0)), "NO", "PENDIENTE", int(ser.get("sesiones", 1)), 0])
-                                if int(ser.get("sesiones", 1)) > 1:
+                                precio = limpiar_monto(ser.get("precio_teorico", 0))
+                                ses_tot = int(ser.get("sesiones", 1))
+                                ws["ventas"].append_row([nid_v, fh, fh[:7], pac["id_paciente"], pac["nombre"], ser["id_servicio"], pac.get("tipo_cliente","GENERAL"), precio, "NO", "PENDIENTE", ses_tot, 0])
+                                if ses_tot > 1:
                                     nid_pl = obtener_siguiente_id_local(datos["planes"], "id_plan_paciente")
-                                    ws["planes"].append_row([nid_pl, pac["id_paciente"], ser["id_servicio"], int(ser.get("sesiones", 1)), 0, "ACTIVO", fh])
+                                    ws["planes"].append_row([nid_pl, pac["id_paciente"], ser["id_servicio"], ses_tot, 0, "ACTIVO", fh, pac["nombre"]])
                                 st.cache_data.clear(); st.rerun()
 
     with tab_lib:
@@ -178,45 +168,48 @@ def agenda_ui(sheet, p_old, s_old, pl_old):
                             st.toast(f"Seleccionado: {d} {h}")
 
     with tab_tur:
-        st.subheader("➕ Agendar Turno/Venta")
+        st.subheader("➕ Agendar Turno y Venta")
         with st.form("f_nuevo"):
-            p_sel = st.selectbox("Paciente", [p["nombre"] for p in datos["pacientes"]])
-            s_sel = st.selectbox("Servicio", [s["nombre"] for s in datos["servicios"]])
+            p_sel = st.selectbox("Seleccionar Paciente", [p["nombre"] for p in datos["pacientes"]])
+            s_sel = st.selectbox("Seleccionar Servicio", [s["nombre"] for s in datos["servicios"]])
             f_n = st.date_input("Fecha", value=st.session_state.get('temp_fecha', date.today()))
             h_n = st.selectbox("Hora", generar_horarios(), index=generar_horarios().index(st.session_state.get('temp_hora', '08:00')) if st.session_state.get('temp_hora') in generar_horarios() else 0)
             
-            if st.form_submit_button("Confirmar Todo", use_container_width=True):
+            if st.form_submit_button("Confirmar Turno y Crear Venta", use_container_width=True):
                 pac = next(p for p in datos["pacientes"] if p["nombre"] == p_sel)
                 ser = next(s for s in datos["servicios"] if s["nombre"] == s_sel)
                 fh = datetime.now().strftime("%Y-%m-%d")
+                
+                # 1. Registrar Turno
                 nid_t = obtener_siguiente_id_local(datos["turnos"], "id_turno")
-                nid_v = obtener_siguiente_id_local(datos["ventas"], "id_venta")
-                
-                # Guardar Turno y Venta
                 ws["turnos"].append_row([nid_t, str(f_n), h_n, pac["id_paciente"], pac["nombre"], pac.get("tipo_cliente","GENERAL"), ser["id_servicio"], ser["nombre"], "RESERVADO"])
-                ws["ventas"].append_row([nid_v, fh, fh[:7], pac["id_paciente"], pac["nombre"], ser["id_servicio"], pac.get("tipo_cliente","GENERAL"), limpiar_monto(ser.get("precio_teorico", 0)), "NO", "EFECTIVO", int(ser.get("sesiones", 1)), 0])
                 
-                if int(ser.get("sesiones", 1)) > 1:
+                # 2. Registrar Venta (Arreglado para coincidir con tus columnas)
+                nid_v = obtener_siguiente_id_local(datos["ventas"], "id_venta")
+                precio = limpiar_monto(ser.get("precio_teorico", 0))
+                sesiones = int(ser.get("sesiones", 1))
+                ws["ventas"].append_row([nid_v, fh, fh[:7], pac["id_paciente"], pac["nombre"], ser["id_servicio"], pac.get("tipo_cliente","GENERAL"), precio, "NO", "EFECTIVO", sesiones, 0])
+                
+                # 3. Registrar Plan si corresponde
+                if sesiones > 1:
                     nid_pl = obtener_siguiente_id_local(datos["planes"], "id_plan_paciente")
-                    ws["planes"].append_row([nid_pl, pac["id_paciente"], ser["id_servicio"], int(ser.get("sesiones", 1)), 0, "ACTIVO", fh])
+                    ws["planes"].append_row([nid_pl, pac["id_paciente"], ser["id_servicio"], sesiones, 0, "ACTIVO", fh, pac["nombre"]])
                 
-                st.success(f"Turno y Venta registrados para {pac['nombre']}")
+                st.success(f"✅ Registrado: Turno, Venta y Plan para {pac['nombre']}")
                 time.sleep(1); st.cache_data.clear(); st.rerun()
 
     with tab_pac:
-        st.subheader("👤 Nuevo Paciente")
+        st.subheader("👤 Alta de Nuevo Paciente")
         with st.form("f_paciente"):
             n_n = st.text_input("Nombre y Apellido")
             d_n = st.text_input("DNI")
-            t_n = st.text_input("Teléfono (Ej: 5492920...)")
+            t_n = st.text_input("Teléfono")
             tipo = st.selectbox("Tipo de Cliente", ["GENERAL", "SOCIO_GIM", "PUBLICO"])
-            obs = st.text_area("Observaciones/Patología")
-            
-            if st.form_submit_button("Guardar Paciente"):
+            obs = st.text_area("Observaciones")
+            if st.form_submit_button("Guardar y Sincronizar"):
                 if n_n:
                     nid_p = obtener_siguiente_id_local(datos["pacientes"], "id_paciente")
                     fecha_h = datetime.now().strftime("%Y-%m-%d")
-                    # ORDEN EXACTO: id, nombre, dni, telefono, tipo, fecha, activo, observaciones
                     ws["pacientes"].append_row([nid_p, n_n, d_n, t_n, tipo, fecha_h, "TRUE", obs])
-                    st.success(f"Paciente {n_n} registrado correctamente")
+                    st.success(f"👤 {n_n} guardado. Ahora puedes agendarle un turno en la pestaña anterior.")
                     time.sleep(1); st.cache_data.clear(); st.rerun()

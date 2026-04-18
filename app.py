@@ -66,8 +66,7 @@ st.sidebar.markdown("### Modo")
 
 modo = st.sidebar.selectbox(
     "",
-    ["Profesional", "Recepción"]
-)
+    ["Recepción", "Profesional"])
 
 st.sidebar.title("Menú")
 
