@@ -54,9 +54,62 @@ def obtener_siguiente_id_local(datos_lista, nombre_columna):
         return max(ids) + 1 if ids else 1
     except: return 1
 
+# --- FUNCIÓN QUIRÚRGICA DE SINCRONIZACIÓN ---
+def ejecutar_sincronizacion_maestra(sheet, datos):
+    ws = obtener_hojas_estaticas(sheet)
+    turnos = datos["turnos"]
+    ventas_existentes = datos["ventas"]
+    planes_existentes = datos["planes"]
+    servicios = datos["servicios"]
+    
+    # Crear sets de búsqueda rápida para evitar duplicados
+    # Una venta se identifica por id_paciente, id_servicio y fecha
+    ventas_set = {(str(v['id_paciente']), str(v['id_servicio']), str(v['fecha'])) for v in ventas_existentes}
+    
+    nuevas_ventas = []
+    nuevos_planes = []
+    
+    nid_v = obtener_siguiente_id_local(ventas_existentes, "id_venta")
+    nid_pl = obtener_siguiente_id_local(planes_existentes, "id_plan_paciente")
+    
+    procesados = 0
+    
+    for t in turnos:
+        id_p = str(t['id_paciente'])
+        id_s = str(t['id_servicio'])
+        fecha_t = str(t['fecha'])
+        
+        # Si el turno no tiene venta registrada en esa fecha...
+        if (id_p, id_s, fecha_t) not in ventas_set:
+            ser = next((s for s in servicios if str(s['id_servicio']) == id_s), None)
+            if ser:
+                Procesar = True
+                # Evitar duplicar planes activos
+                if int(ser.get('sesiones', 1)) > 1:
+                    tiene_plan = any(str(pl['id_paciente']) == id_p and str(pl['id_servicio']) == id_s and pl['estado'] == 'ACTIVO' for pl in planes_existentes)
+                    if tiene_plan: Procesar = False # Ya tiene un plan en curso
+                
+                if Procesar:
+                    # Crear Venta
+                    nuevas_ventas.append([nid_v, fecha_t, fecha_t[:7], id_p, t['nombre_paciente'], id_s, t.get('tipo_cliente','GENERAL'), limpiar_monto(ser.get('precio_teorico', 0)), "NO", "PENDIENTE", int(ser.get('sesiones', 1)), 0])
+                    
+                    # Si es plan, crear el registro de Plan
+                    if int(ser.get('sesiones', 1)) > 1:
+                        nuevos_planes.append([nid_pl, id_p, id_s, int(ser.get('sesiones', 1)), 0, "ACTIVO", fecha_t, t['nombre_paciente']])
+                        nid_pl += 1
+                    
+                    nid_v += 1
+                    procesados += 1
+
+    if nuevas_ventas:
+        ws["ventas"].append_rows(nuevas_ventas)
+    if nuevos_planes:
+        ws["planes"].append_rows(nuevos_planes)
+    
+    return procesados
+
 # --- INTERFAZ PRINCIPAL ---
 def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
-    # Inicializar variable para la navegación de semanas en el buscador libres
     if 'semana_offset' not in st.session_state:
         st.session_state.semana_offset = 0
 
@@ -68,6 +121,16 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
         if st.button("🔄 Reintentar"):
             st.cache_data.clear(); st.rerun()
         st.stop()
+
+    # BOTÓN DE SINCRONIZACIÓN EN EL HEADER
+    with st.sidebar:
+        st.divider()
+        st.markdown("### 🛠 Herramientas de Datos")
+        if st.button("🔄 Sincronizar Ventas/Planes Faltantes", help="Busca turnos sin venta y los registra automáticamente"):
+            with st.spinner("Procesando histórico..."):
+                cant = ejecutar_sincronizacion_maestra(sheet, datos)
+                st.success(f"Se recuperaron {cant} registros.")
+                time.sleep(1); st.cache_data.clear(); st.rerun()
 
     tab_ag, tab_lib, tab_tur, tab_pac = st.tabs(["📅 Agenda Diaria", "🔍 Buscador Libres", "➕ Agendar Turno/Venta", "👤 Ficha Paciente"])
 
@@ -157,29 +220,21 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
 
     with tab_lib:
         st.subheader("🔍 Horarios libres")
-        
-        # Barra de navegación de semanas
         col_izq, col_med, col_der = st.columns([1, 2, 1])
         if col_izq.button("⬅️ Semana Anterior", use_container_width=True):
-            st.session_state.semana_offset -= 1
-            st.rerun()
+            st.session_state.semana_offset -= 1; st.rerun()
         if col_der.button("Semana Siguiente ➡️", use_container_width=True):
-            st.session_state.semana_offset += 1
-            st.rerun()
-
+            st.session_state.semana_offset += 1; st.rerun()
         hoy = date.today()
         inicio_semana = (hoy - timedelta(days=hoy.weekday())) + timedelta(weeks=st.session_state.semana_offset)
-        
         col_med.markdown(f"<h4 style='text-align:center; margin-top:0;'>Semana del {inicio_semana.strftime('%d/%m')}</h4>", unsafe_allow_html=True)
-
         cols_dias = st.columns(5)
         for i_d, d in enumerate([inicio_semana + timedelta(days=i) for i in range(5)]):
             with cols_dias[i_d]:
                 st.markdown(f"**{['Lun','Mar','Mié','Jue','Vie'][i_d]} {d.day}/{d.month}**")
                 ocup = [turn["hora"] for turn in datos["turnos"] if str(turn["fecha"]) == str(d) and turn["estado"] != "CANCELADO"]
                 for h in generar_horarios():
-                    if h in ocup: 
-                        st.button(f"🔴 {h}", key=f"l_{d}_{h}", disabled=True, use_container_width=True)
+                    if h in ocup: st.button(f"🔴 {h}", key=f"l_{d}_{h}", disabled=True, use_container_width=True)
                     else:
                         if st.button(f"🟢 {h}", key=f"l_{d}_{h}", use_container_width=True):
                             st.session_state.temp_fecha, st.session_state.temp_hora = d, h
@@ -187,14 +242,10 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
 
     with tab_tur:
         st.subheader("➕ Agendar Turno y Venta")
-        
-        # Selector de tipo de agendamiento
         tipo_agenda = st.radio("Modalidad de reserva:", ["Turno Único", "Turnos Recurrentes (Días fijos)"], horizontal=True)
-
         with st.form("f_nuevo"):
             p_sel = st.selectbox("Seleccionar Paciente", [p["nombre"] for p in datos["pacientes"]])
             s_sel = st.selectbox("Seleccionar Servicio", [s["nombre"] for s in datos["servicios"]])
-            
             if tipo_agenda == "Turno Único":
                 f_n = st.date_input("Fecha", value=st.session_state.get('temp_fecha', date.today()))
                 h_n = st.selectbox("Hora", generar_horarios(), index=generar_horarios().index(st.session_state.get('temp_hora', '08:00')) if st.session_state.get('temp_hora') in generar_horarios() else 0)
@@ -202,7 +253,6 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
                 col_d, col_h = st.columns(2)
                 dias_sel = col_d.multiselect("Días de atención", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"])
                 h_n = col_h.selectbox("Hora Fija", generar_horarios(), index=generar_horarios().index(st.session_state.get('temp_hora', '08:00')) if st.session_state.get('temp_hora') in generar_horarios() else 0)
-                
                 col_f, col_c = st.columns(2)
                 f_n = col_f.date_input("A partir de la fecha:", value=date.today())
                 cant_turnos = col_c.number_input("Cantidad total de turnos a reservar", min_value=2, max_value=40, value=10)
@@ -211,49 +261,31 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
                 pac = next(p for p in datos["pacientes"] if p["nombre"] == p_sel)
                 ser = next(s for s in datos["servicios"] if s["nombre"] == s_sel)
                 fh = datetime.now().strftime("%Y-%m-%d")
-                
                 nid_t = obtener_siguiente_id_local(datos["turnos"], "id_turno")
                 nuevos_turnos = []
-
-                # Lógica para empaquetar los turnos (Único o Múltiples)
                 if tipo_agenda == "Turno Único":
                     nuevos_turnos.append([nid_t, str(f_n), h_n, pac["id_paciente"], pac["nombre"], pac.get("tipo_cliente","GENERAL"), ser["id_servicio"], ser["nombre"], "RESERVADO"])
                 else:
-                    if not dias_sel:
-                        st.error("⚠️ Debes seleccionar al menos un día fijo (ej: Martes).")
-                        st.stop()
-                    
+                    if not dias_sel: st.error("⚠️ Selecciona al menos un día."); st.stop()
                     mapa_dias = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4}
                     dias_num = [mapa_dias[d] for d in dias_sel]
-                    
-                    turnos_creados = 0
-                    fecha_actual = f_n
-                    
-                    # Bucle para encontrar las fechas exactas que coincidan con los días elegidos
+                    turnos_creados, fecha_actual = 0, f_n
                     while turnos_creados < cant_turnos:
                         if fecha_actual.weekday() in dias_num:
                             nuevos_turnos.append([nid_t + turnos_creados, str(fecha_actual), h_n, pac["id_paciente"], pac["nombre"], pac.get("tipo_cliente","GENERAL"), ser["id_servicio"], ser["nombre"], "RESERVADO"])
                             turnos_creados += 1
                         fecha_actual += timedelta(days=1)
-
-                # 1. Registrar Turno(s) en bloque para NO saturar la API
-                if len(nuevos_turnos) == 1:
-                    ws["turnos"].append_row(nuevos_turnos[0])
-                else:
-                    ws["turnos"].append_rows(nuevos_turnos)
+                if len(nuevos_turnos) == 1: ws["turnos"].append_row(nuevos_turnos[0])
+                else: ws["turnos"].append_rows(nuevos_turnos)
                 
-                # 2. Registrar Venta (Una sola venta aunque sean 10 turnos)
                 nid_v = obtener_siguiente_id_local(datos["ventas"], "id_venta")
                 precio = limpiar_monto(ser.get("precio_teorico", 0))
                 sesiones = int(ser.get("sesiones", 1))
                 ws["ventas"].append_row([nid_v, fh, fh[:7], pac["id_paciente"], pac["nombre"], ser["id_servicio"], pac.get("tipo_cliente","GENERAL"), precio, "NO", "EFECTIVO", sesiones, 0])
-                
-                # 3. Registrar Plan si el servicio tiene más de 1 sesión
                 if sesiones > 1:
                     nid_pl = obtener_siguiente_id_local(datos["planes"], "id_plan_paciente")
                     ws["planes"].append_row([nid_pl, pac["id_paciente"], ser["id_servicio"], sesiones, 0, "ACTIVO", fh, pac["nombre"]])
-                
-                st.success(f"✅ Registrado exitosamente: {len(nuevos_turnos)} turno(s), Venta y Plan para {pac['nombre']}")
+                st.success(f"✅ Registrado exitosamente.")
                 time.sleep(1); st.cache_data.clear(); st.rerun()
 
     with tab_pac:
@@ -269,5 +301,5 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
                     nid_p = obtener_siguiente_id_local(datos["pacientes"], "id_paciente")
                     fecha_h = datetime.now().strftime("%Y-%m-%d")
                     ws["pacientes"].append_row([nid_p, n_n, d_n, t_n, tipo, fecha_h, "TRUE", obs])
-                    st.success(f"👤 {n_n} guardado. Ahora puedes agendarle un turno en la pestaña anterior.")
+                    st.success(f"👤 {n_n} guardado.")
                     time.sleep(1); st.cache_data.clear(); st.rerun()
