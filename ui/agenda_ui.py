@@ -7,7 +7,7 @@ from domain.agenda_logic import (
     actualizar_contador_plan, crear_entrada_plan
 )
 
-# --- PROTECCIÓN ANTI-BLOQUEO (CACHE MAESTRO) ---
+# ---- PROTECCIÓN ANTI-BLOQUEO (CACHE MAESTRO) ----
 @st.cache_resource
 def obtener_hojas_estaticas(_sheet):
     return {
