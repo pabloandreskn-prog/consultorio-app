@@ -115,14 +115,13 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
         f_sel = c1.date_input("Ver día:", value=date.today(), key="ag_f")
         busq = c2.text_input("🔍 Buscar paciente...", key="ag_b")
 
-        # Obtenemos los turnos del día
+        # 1. Filtramos los turnos
         t_dia = [(i + 2, t) for i, t in enumerate(datos["turnos"]) 
                  if str(t.get("fecha")) == str(f_sel) and t.get("estado") != "CANCELADO" and (busq.lower() in str(t.get("nombre_paciente", "")).lower())]
 
-        # --- MODIFICACIÓN QUIRÚRGICA: ORDENAMIENTO POR HORA ---
-        # Ordenamos la lista t_dia basándonos en el campo 'hora' del diccionario del turno (índice 1 de la tupla)
-        t_dia.sort(key=lambda x: x[1].get("hora", "00:00"))
-        # --------------------------------------------------------
+        # 2. --- CORRECCIÓN DEFINITIVA DE ORDENAMIENTO ---
+        # Ordenamos asegurando que se trate como texto limpio (ej: "08:00")
+        t_dia.sort(key=lambda x: str(x[1].get("hora", "23:59")).strip())
 
         if not t_dia:
             st.info("No hay turnos para esta fecha.")
@@ -130,12 +129,10 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
             cols = st.columns(3)
             for idx, (fila_real, t) in enumerate(t_dia):
                 with cols[idx % 3]:
-                    # Cálculo de Deuda
                     v_pac = sum(limpiar_monto(v.get("monto_total", 0)) for v in datos["ventas"] if str(v.get("id_paciente")) == str(t["id_paciente"]))
                     p_pac = sum(limpiar_monto(p.get("monto", 0)) for p in datos["pagos"] if str(p.get("id_paciente")) == str(t["id_paciente"]))
                     deuda = max(0.0, v_pac - p_pac)
                     
-                    # --- LÓGICA DE CONTEO ROBUSTA ---
                     us, tot = 0, 0
                     plan_activo = next((pl for pl in datos["planes"] 
                                       if str(pl.get("id_paciente")) == str(t["id_paciente"]) 
@@ -145,7 +142,6 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
                     if plan_activo:
                         tot = int(plan_activo.get("sesiones_totales", 0))
                         fecha_inicio_plan = str(plan_activo.get("fecha_inicio", "1900-01-01"))
-                        # Contamos solo asistencias desde la fecha de este plan específico
                         asistencias = [tn for tn in datos["turnos"] 
                                      if str(tn.get("id_paciente")) == str(t["id_paciente"]) 
                                      and str(tn.get("id_servicio")) == str(t["id_servicio"]) 
@@ -153,7 +149,6 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
                                      and str(tn.get("fecha")) >= fecha_inicio_plan]
                         us = len(asistencias)
                     
-                    # UI de la tarjeta
                     restantes = tot - us
                     color_barra = "#d32f2f" if restantes <= 1 and tot > 0 else "#4caf50"
                     porcentaje = (min(us, tot) / tot * 100) if tot > 0 else 0
@@ -177,12 +172,10 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
                         if deuda > 0:
                             st.markdown(f"<p style='color:#d32f2f; font-weight:bold; font-size:0.8em; margin:0;'>⚠️ DEUDA: ${deuda:,.0f}</p>", unsafe_allow_html=True)
 
-                        # --- RECUPERACIÓN DE BOTONES ASISTIÓ / FALTÓ ---
                         if t["estado"] == "RESERVADO":
                             cb1, cb2 = st.columns(2)
                             if cb1.button("✅ Asistió", key=f"as_{t['id_turno']}_{idx}", use_container_width=True):
                                 ws["turnos"].update_cell(fila_real, 9, "ASISTIÓ")
-                                # Sincronizar con el contador de la hoja planes si es necesario
                                 if plan_activo:
                                     actualizar_contador_plan(sheet, t["id_paciente"], t["id_servicio"])
                                 st.cache_data.clear(); st.rerun()
@@ -207,7 +200,7 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
                                 st.cache_data.clear(); st.rerun()
 
                             st.divider()
-                            st.markdown("**💰 Cobrar**")
+                            st.markdown("**💰 Cobrar / Renovar**")
                             with st.form(f"pago_{t['id_turno']}"):
                                 m_p = st.number_input("Monto", value=deuda if deuda > 0 else 0.0)
                                 met = st.selectbox("Método", ["EFECTIVO", "TRANSFERENCIA", "MP"])
@@ -227,10 +220,7 @@ def agenda_ui(sheet, pacientes=None, servicios=None, planes_pacientes=None):
         inicio = (hoy - timedelta(days=hoy.weekday())) + timedelta(weeks=st.session_state.semana_offset)
         c_m.markdown(f"<h4 style='text-align:center;'>Semana del {inicio.strftime('%d/%m')}</h4>", unsafe_allow_html=True)
         
-        # --- MODIFICACIÓN QUIRÚRGICA: DÍAS EN ESPAÑOL Y FORMATO AMIGABLE ---
         dias_esp = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
-        # -------------------------------------------------------------------
-        
         cols_dias = st.columns(len(dias_esp))
         for i, d_label in enumerate(dias_esp):
             d = inicio + timedelta(days=i)
